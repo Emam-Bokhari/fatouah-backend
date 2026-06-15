@@ -49,12 +49,21 @@ app.post(
   createConnectLink,
 );
 
-Delivery.watch([{ $match: { 'fullDocument.status': 'REQUESTED' } }])
-  .on('change', async (change) => {
-    const deliveryId = change.fullDocument._id.toString();
-    await notifyNearestRiders(deliveryId);
-
+setInterval(async () => {
+  const deliveries = await Delivery.find({
+    status: 'REQUESTED',
+    notified: { $ne: true }
   });
+
+  for (const d of deliveries) {
+    await notifyNearestRiders(d._id.toString());
+
+    await Delivery.updateOne(
+      { _id: d._id },
+      { $set: { notified: true } }
+    );
+  }
+}, 3000);
 
 // Express.js route
 app.get('/stripe/success', (req, res) => {
