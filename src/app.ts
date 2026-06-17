@@ -5,7 +5,6 @@ import globalErrorHandler from './app/middlewares/globalErrorHandler';
 import router from './routes';
 import { Morgan } from './shared/morgen';
 import stripe from './config/stripe';
-import config from './config';
 import {
   createConnectLink,
   stripeWebhookController,
@@ -50,18 +49,44 @@ app.post(
 );
 
 setInterval(async () => {
-  const deliveries = await Delivery.find({
-    status: 'REQUESTED',
-    notified: { $ne: true }
-  });
+  try {
+    const deliveries = await Delivery.find({
+      status: 'REQUESTED',
+      notified: { $ne: true }
+    });
 
-  for (const d of deliveries) {
-    await notifyNearestRiders(d._id.toString());
+    for (const d of deliveries) {
+      try {
+        await notifyNearestRiders(d._id.toString());
 
-    await Delivery.updateOne(
-      { _id: d._id },
+        // Only mark as notified if it's still REQUESTED (in case notifyNearestRiders already marked it)
+        const currentDelivery = await Delivery.findById(d._id);
+        if (currentDelivery && !currentDelivery.notified) {
+          await Delivery.updateOne(
+            { _id: d._id },
+            { $set: { notified: true } }
+          );
+        }
+      } catch (err) {
+        console.error(`Error processing delivery ${d._id}:`, err);
+        // Mark as notified even if there's an error, so it doesn't keep getting processed
+        await Delivery.updateOne(
+          { _id: d._id },
+          { $set: { notified: true } }
+        );
+      }
+    }
+    
+    // Also, let's mark any deliveries that are no longer REQUESTED as notified
+    await Delivery.updateMany(
+      { 
+        status: { $ne: 'REQUESTED' }, 
+        notified: { $ne: true } 
+      },
       { $set: { notified: true } }
     );
+  } catch (err) {
+    console.error("Error in delivery notification interval:", err);
   }
 }, 3000);
 

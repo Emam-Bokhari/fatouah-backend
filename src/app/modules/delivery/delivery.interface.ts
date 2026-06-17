@@ -35,6 +35,7 @@ export interface IDelivery {
   attempts: DeliveryAttempt[];
   rejectedRiders?: Types.ObjectId[];
   isActive?: boolean;
+  notified?: boolean;
 }
 
 // delivery status types

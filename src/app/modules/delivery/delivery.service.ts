@@ -752,7 +752,16 @@ const updateStatus = async ({
     delivery.timestamps[tsKey] = new Date();
   }
 
-  await delivery.save({ session });
+  try {
+    await delivery.save({ session });
+  } catch (err: any) {
+    if (err.name === 'VersionError') {
+      console.warn(`⚠️ VersionError in updateStatus for delivery ${deliveryId}, refetching and retrying...`);
+      // Retry with fresh document
+      return await updateStatus({ deliveryId, status, riderId, userId, session });
+    }
+    throw err;
+  }
 
   const updatedDelivery = await Delivery.findById(delivery._id)
     .populate('rider')
@@ -808,6 +817,14 @@ export const notifyNearestRiders = async (deliveryId: string) => {
   if (!delivery) throw new ApiError(StatusCodes.NOT_FOUND, 'Delivery not found');
   if (delivery.status !== 'REQUESTED') return;
 
+  // Check if order exists and has pickupLocation
+  if (!delivery.order || !delivery.order.pickupLocation) {
+    console.warn(`⚠️ Delivery ${deliveryId} has no order or no pickupLocation, skipping notifyNearestRiders`);
+    delivery.notified = true;
+    await delivery.save();
+    return;
+  }
+
   const attemptedRiders = delivery.attempts.map(a => a.rider.toString());
 
   const nearestRiders = await findNearestOnlineRiders(delivery.order.pickupLocation);
@@ -816,17 +833,33 @@ export const notifyNearestRiders = async (deliveryId: string) => {
   if (!nextRider) {
     await updateStatus({ deliveryId, status: 'FAILED' });
     await refundIfNeeded(deliveryId);
+    // Mark as notified so it doesn't get processed again
+    await Delivery.updateOne({ _id: deliveryId }, { $set: { notified: true } });
     return;
   }
 
 
 
-  // @ts-ignore
+  //@ts-ignore
   const socketIo = global.io;
   socketIo.emit(`delivery::request::${nextRider._id}`, delivery);
 
   delivery.attempts.push({ rider: nextRider._id, attemptedAt: new Date() });
-  await delivery.save();
+  try {
+    await delivery.save();
+  } catch (err: any) {
+    if (err.name === 'VersionError') {
+      console.warn(`⚠️ VersionError for delivery ${deliveryId}, refetching and retrying...`);
+      // Refetch the document
+      const refetchedDelivery = await Delivery.findById(deliveryId);
+      if (refetchedDelivery && refetchedDelivery.status === 'REQUESTED') {
+        // Retry notifyNearestRiders
+        await notifyNearestRiders(deliveryId);
+      }
+    } else {
+      throw err;
+    }
+  }
 
   setTimeout(async () => {
     const updatedDelivery = await Delivery.findById(deliveryId);

@@ -45,6 +45,10 @@ const deliverySchema = new Schema<IDelivery>(
     isActive: {
       type: Boolean,
     },
+    notified: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,
